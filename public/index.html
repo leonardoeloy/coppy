@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>coppy — shared clipboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 6px; }
+  </style>
+</head>
+<body class="h-full bg-zinc-950 text-zinc-100 antialiased">
+
+  <div class="mx-auto flex h-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
+
+    <!-- header -->
+    <header class="flex flex-wrap items-center gap-3">
+      <h1 class="text-lg font-semibold tracking-tight">coppy</h1>
+
+      <span id="conn"
+            class="rounded-full border border-zinc-800 px-2 py-0.5 text-xs text-zinc-500">
+        connecting…
+      </span>
+
+      <div class="ml-auto flex items-center gap-3">
+        <label class="flex cursor-pointer select-none items-center gap-2 text-xs text-zinc-400">
+          <input id="autocopy" type="checkbox" checked
+                 class="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 accent-emerald-500" />
+          auto-copy
+        </label>
+        <button id="rename"
+                class="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-600 hover:text-white">
+          this device: <span id="me-name" class="font-medium">…</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- devices -->
+    <div id="devices" class="flex flex-wrap gap-2"></div>
+
+    <!-- composer -->
+    <section class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+      <textarea id="input" rows="3" placeholder="Paste here (⌘V / Ctrl+V) — or type and hit ⌘↵"
+        class="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-600/60"></textarea>
+      <div class="mt-2 flex items-center gap-3">
+        <p class="text-xs text-zinc-500">
+          Pasting anywhere on this page sends to every other device.
+        </p>
+        <button id="send"
+          class="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40">
+          Send
+        </button>
+      </div>
+    </section>
+
+    <!-- history -->
+    <section class="flex min-h-0 flex-1 flex-col">
+      <div class="mb-2 flex items-center gap-3">
+        <h2 class="text-xs font-medium uppercase tracking-wider text-zinc-500">History</h2>
+        <button id="clear"
+                class="ml-auto text-xs text-zinc-600 hover:text-red-400">clear all</button>
+      </div>
+      <ul id="history" class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1"></ul>
+      <p id="empty" class="hidden py-10 text-center text-sm text-zinc-600">
+        Nothing yet. Copy something on another machine and paste it here.
+      </p>
+    </section>
+  </div>
+
+  <!-- manual-copy prompt: shown when the browser blocks silent clipboard writes -->
+  <button id="banner"
+    class="fixed inset-x-0 bottom-0 hidden w-full bg-emerald-600 px-4 py-3 text-center text-sm font-medium text-white hover:bg-emerald-500">
+    New clip from <span id="banner-src"></span> — click anywhere here to copy it
+  </button>
+
+  <div id="toast"
+    class="pointer-events-none fixed bottom-4 left-1/2 hidden -translate-x-1/2 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 shadow-lg"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

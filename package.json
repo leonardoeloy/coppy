@@ -1,0 +1,13 @@
+{
+  "name": "coppy",
+  "version": "1.0.0",
+  "description": "Multi-device clipboard sync over the LAN",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
