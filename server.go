@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/coder/websocket"
 	"io"
 	"io/fs"
 	"log"
@@ -31,6 +32,7 @@ var webAssets embed.FS
 type subscriber struct {
 	id     string
 	events chan string
+	conn   *websocket.Conn
 }
 type app struct {
 	db                        *sql.DB
@@ -39,6 +41,7 @@ type app struct {
 	maxFile                   int64
 	fileMu, identityMu, hubMu sync.Mutex
 	streams                   map[*subscriber]bool
+	socketsClosed             bool
 	static                    http.Handler
 }
 
@@ -64,6 +67,18 @@ func newApp(o options, ca []byte) (*app, error) {
 	return a, nil
 }
 func runServer(ctx context.Context, o options) error {
+	if err := os.MkdirAll(o.Dir, 0700); err != nil {
+		return err
+	}
+	dir, err := filepath.EvalSymlinks(o.Dir)
+	if err != nil {
+		return err
+	}
+	o.Dir = dir
+	excluded, err := serverExclusions(o)
+	if err != nil {
+		return err
+	}
 	cert, ca, err := ensureTLS(o.TLSDir)
 	if err != nil {
 		return err
@@ -81,6 +96,7 @@ func runServer(ctx context.Context, o options) error {
 		return err
 	}
 	defer a.db.Close()
+	defer a.closeSockets()
 	listener, err := net.Listen("tcp", o.Listen)
 	if err != nil {
 		return err
@@ -88,23 +104,49 @@ func runServer(ctx context.Context, o options) error {
 	srv := &http.Server{Handler: a, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(tls.NewListener(listener, srv.TLSConfig)) }()
-	log.Printf("Coppy HTTPS server: https://%s\nCA SHA-256: %s", listener.Addr(), fingerprint(ca))
-	if err = markReady(); err != nil {
+	log.Printf("Coppy HTTPS server: https://%s\nSync folder: %s\nCA SHA-256: %s", listener.Addr(), o.Dir, fingerprint(ca))
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
 		srv.Close()
 		<-done
 		return err
 	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		if ip.To4() != nil {
+			host = "127.0.0.1"
+		} else {
+			host = "::1"
+		}
+	}
+	syncCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	synced := make(chan error, 1)
+	go func() {
+		synced <- runSync(syncCtx, "https://"+net.JoinHostPort(host, port), o.Dir, filepath.Join(o.TLSDir, "ca.pem"), false, o.Interval, excluded...)
+	}()
 	select {
 	case <-ctx.Done():
+		cancel()
 		srv.Close()
 		<-done
+		<-synced
 		return nil
+	case err = <-synced:
+		srv.Close()
+		<-done
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
 	case err = <-done:
+		cancel()
+		<-synced
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	}
+
 }
 func respond(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -174,12 +216,12 @@ func (a *app) route(w http.ResponseWriter, r *http.Request) error {
 	if path == "/api/file" {
 		return a.file(w, r)
 	}
-	if path == "/api/events" && r.Method == "GET" {
+	if path == "/api/ws" && r.Method == "GET" {
 		d, err := a.identify(w, r)
 		if err != nil {
 			return err
 		}
-		a.events(w, r, d)
+		a.websocketHandler(w, r, d)
 		return nil
 	}
 	if path == "/api/state" && r.Method == "GET" {
@@ -409,8 +451,8 @@ func (a *app) online() []string {
 	return out
 }
 func event(name string, data any) string {
-	b, _ := json.Marshal(data)
-	return "event: " + name + "\ndata: " + string(b) + "\n\n"
+	b, _ := json.Marshal(map[string]any{"event": name, "data": data})
+	return string(b)
 }
 func (a *app) broadcast(name string, data any) {
 	message := event(name, data)
@@ -425,29 +467,33 @@ func (a *app) broadcast(name string, data any) {
 		}
 	}
 }
-func (a *app) events(w http.ResponseWriter, r *http.Request, d device) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("X-Accel-Buffering", "no")
-	s := &subscriber{d.ID, make(chan string, 64)}
+func (a *app) websocketHandler(w http.ResponseWriter, r *http.Request, d device) {
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	ctx := conn.CloseRead(context.Background())
+	sub := &subscriber{id: d.ID, events: make(chan string, 64), conn: conn}
 	a.hubMu.Lock()
-	a.streams[s] = true
+	if a.socketsClosed {
+		a.hubMu.Unlock()
+		return
+	}
+	a.streams[sub] = true
 	a.hubMu.Unlock()
 	defer func() {
 		a.hubMu.Lock()
-		delete(a.streams, s)
+		delete(a.streams, sub)
 		a.hubMu.Unlock()
 		a.broadcast("presence", map[string]any{"online": a.online()})
 	}()
-	controller := http.NewResponseController(w)
-	write := func(text string) error {
-		controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if _, err := io.WriteString(w, text); err != nil {
-			return err
-		}
-		return controller.Flush()
+	write := func(message string) error {
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		return conn.Write(ctx, websocket.MessageText, []byte(message))
 	}
-	if write("retry: 2000\n\n"+event("hello", map[string]any{"device": d})) != nil {
+	if write(event("hello", map[string]any{"device": d})) != nil {
 		return
 	}
 	a.broadcast("presence", map[string]any{"online": a.online()})
@@ -455,16 +501,82 @@ func (a *app) events(w http.ResponseWriter, r *http.Request, d device) {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
-		case message, ok := <-s.events:
+		case message, ok := <-sub.events:
 			if !ok || write(message) != nil {
 				return
 			}
 		case <-ticker.C:
-			if write(": ping\n\n") != nil {
+			pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
 				return
 			}
 		}
+	}
+}
+func (a *app) closeSockets() {
+	a.hubMu.Lock()
+	a.socketsClosed = true
+	connections := []*websocket.Conn{}
+	for s := range a.streams {
+		connections = append(connections, s.conn)
+	}
+	a.hubMu.Unlock()
+	for _, conn := range connections {
+		conn.CloseNow()
+	}
+}
+
+func serverExclusions(o options) ([]string, error) {
+	dir, err := canonicalPath(o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	o.Dir = dir
+	paths := []string{o.Data, o.Files, o.TLSDir, o.Downloads, o.DB, o.DB + "-wal", o.DB + "-shm", o.DB + "-journal", o.DB + ".lock"}
+	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, exe)
+	}
+	excluded := []string{}
+	for _, p := range paths {
+		p, err := canonicalPath(p)
+		if err != nil {
+			return nil, err
+		}
+		if withinPath(o.Dir, p) {
+			return nil, fmt.Errorf("sync folder %s must be outside internal storage or executable path %s", o.Dir, p)
+		}
+		excluded = append(excluded, p)
+	}
+	return excluded, nil
+}
+
+// Resolve existing symlink parents even when a storage leaf has not been created.
+func canonicalPath(path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	suffix := []string{}
+	for {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(path))
+		path = parent
 	}
 }

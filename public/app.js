@@ -47,23 +47,47 @@ async function loadState() {
 // ------------------------------------------------------------------ realtime
 
 function connect() {
-  const es = new EventSource('/api/events');
+  const events = new EventTarget();
+  let retryDelay = 1000;
+  function openSocket() {
+    const socket = new WebSocket(`wss://${window.location.host}/api/ws`);
+    socket.addEventListener('open', () => {
+      retryDelay = 1000;
+      events.dispatchEvent(new Event('open'));
+    });
+    socket.addEventListener('message', (message) => {
+      try {
+        const { event, data } = JSON.parse(message.data);
+        events.dispatchEvent(new MessageEvent(event, { data: JSON.stringify(data) }));
+      } catch { socket.close(); }
+    });
+    socket.addEventListener('close', () => {
+      events.dispatchEvent(new Event('error'));
+      setTimeout(openSocket, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+    });
+  }
+  openSocket();
+  events.addEventListener('file', loadFiles);
 
-  es.addEventListener('open', () => setConn('live', 'text-emerald-400 border-emerald-800'));
-  es.addEventListener('error', () => setConn('reconnecting…', 'text-amber-400 border-amber-900'));
+  events.addEventListener('open', () => setConn('live', 'text-emerald-400 border-emerald-800'));
+  events.addEventListener('error', () => setConn('reconnecting…', 'text-amber-400 border-amber-900'));
 
-  es.addEventListener('hello', (e) => {
+  events.addEventListener('hello', (e) => {
     state.me = JSON.parse(e.data).device;
+    // Refresh after reconnection to recover any events missed while offline.
+    loadState().catch(() => setConn('reconnecting…', 'text-amber-400 border-amber-900'));
+    loadFiles();
     el.meName.textContent = state.me.name;
     setConn('live', 'text-emerald-400 border-emerald-800');
   });
 
-  es.addEventListener('presence', (e) => {
+  events.addEventListener('presence', (e) => {
     state.online = new Set(JSON.parse(e.data).online);
     renderDevices();
   });
 
-  es.addEventListener('device', (e) => {
+  events.addEventListener('device', (e) => {
     const { device } = JSON.parse(e.data);
     state.devices.set(device.id, device);
     if (device.id === state.me.id) el.meName.textContent = device.name;
@@ -71,7 +95,7 @@ function connect() {
     renderHistory();
   });
 
-  es.addEventListener('clip', (e) => {
+  events.addEventListener('clip', (e) => {
     const { clip, device } = JSON.parse(e.data);
     state.devices.set(device.id, device);
     state.clips.push(clip);
@@ -82,13 +106,13 @@ function connect() {
     if (clip.deviceId !== state.me.id && el.autocopy.checked) receive(clip);
   });
 
-  es.addEventListener('clip-deleted', (e) => {
+  events.addEventListener('clip-deleted', (e) => {
     const { id } = JSON.parse(e.data);
     state.clips = state.clips.filter((c) => c.id !== id);
     renderHistory();
   });
 
-  es.addEventListener('cleared', () => {
+  events.addEventListener('cleared', () => {
     state.clips = [];
     renderHistory();
   });
@@ -345,7 +369,7 @@ $('file-upload').addEventListener('change', async (event) => {
   finally { input.disabled = false; input.value = ''; }
 });
 loadFiles();
-setInterval(loadFiles, 5000);
+
 
 // Downloaded executables embed this server’s public CA.
 async function loadTLSSetup() {

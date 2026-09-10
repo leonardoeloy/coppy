@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,9 +26,10 @@ type syncer struct {
 	base, dir string
 	client    *http.Client
 	baseline  map[string]string
+	excluded  []string
 }
 
-func runSync(ctx context.Context, base, dir, ca string, once bool, interval time.Duration) error {
+func runSync(ctx context.Context, base, dir, ca string, once bool, interval time.Duration, excluded ...string) error {
 	client, err := secureClient(ca)
 	if err != nil {
 		return err
@@ -42,7 +44,7 @@ func runSync(ctx context.Context, base, dir, ca string, once bool, interval time
 	}
 	defer os.Remove(lock)
 	client.Transport = contextTransport{ctx, client.Transport}
-	s := syncer{base, dir, client, map[string]string{}}
+	s := syncer{base: base, dir: dir, client: client, baseline: map[string]string{}, excluded: excluded}
 	statePath := filepath.Join(dir, ".coppy-state.json")
 	if b, e := os.ReadFile(statePath); e == nil {
 		if e = json.Unmarshal(b, &s.baseline); e != nil {
@@ -62,8 +64,26 @@ func runSync(ctx context.Context, base, dir, ca string, once bool, interval time
 	if err = markReady(); err != nil {
 		return err
 	}
+	changes := make(chan struct{}, 1)
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	if !once {
+		go func() { defer close(watchDone); watchFileEvents(watchCtx, base, client, changes) }()
+	} else {
+		close(watchDone)
+	}
+	defer func() { stopWatch(); <-watchDone }()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var observed map[string]string
+	retry := false
 	for {
-		err = s.run()
+		before, scanErr := s.localFiles()
+		if scanErr != nil {
+			err = scanErr
+		} else {
+			err = s.run()
+		}
 		if err == nil {
 			var b []byte
 			b, err = json.Marshal(s.baseline)
@@ -74,16 +94,29 @@ func runSync(ctx context.Context, base, dir, ca string, once bool, interval time
 				err = os.Rename(statePath+".tmp", statePath)
 			}
 		}
+		if err == nil {
+			observed = before
+		}
+		retry = err != nil
 		if once {
 			return err
 		}
 		if err != nil {
 			log.Print(err)
 		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(interval):
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-changes:
+				break wait
+			case <-ticker.C:
+				current, e := s.localFiles()
+				if e != nil || retry || !maps.Equal(current, observed) {
+					break wait
+				}
+			}
 		}
 	}
 }
@@ -118,46 +151,18 @@ func (s *syncer) run() error {
 		if !safe(f.Path) {
 			return fmt.Errorf("unsafe remote path %q", f.Path)
 		}
-		remote[f.Path] = f.Hash
-	}
-	local := map[string]string{}
-	e = filepath.WalkDir(s.dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == s.dir {
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".coppy-") {
-			if d.IsDir() {
-				return filepath.SkipDir
+		localPath := filepath.Join(s.dir, filepath.FromSlash(f.Path))
+		protected := s.excludes(localPath)
+		for _, excluded := range s.excluded {
+			if withinPath(excluded, localPath) {
+				protected = true
 			}
-			return nil
 		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
+		if !protected {
+			remote[f.Path] = f.Hash
 		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		rel, _ := filepath.Rel(s.dir, p)
-		rel = filepath.ToSlash(rel)
-		if !safe(rel) {
-			return fmt.Errorf("non-portable path %q", rel)
-		}
-		h, err := digest(p)
-		if err == nil {
-			local[rel] = h
-		}
-		return err
-	})
+	}
+	local, e := s.localFiles()
 	if e != nil {
 		return e
 	}
@@ -322,4 +327,64 @@ func (t contextTransport) CloseIdleConnections() {
 	if c, ok := t.inner.(interface{ CloseIdleConnections() }); ok {
 		c.CloseIdleConnections()
 	}
+}
+
+// Server storage is excluded on both upload and download to avoid exposing keys
+// or replacing the database with a peer's file at the same relative path.
+func (s *syncer) excludes(path string) bool {
+	for _, excluded := range s.excluded {
+		if withinPath(path, excluded) {
+			return true
+		}
+	}
+	return false
+}
+func withinPath(path, root string) bool {
+	path, root = strings.ToLower(filepath.Clean(path)), strings.ToLower(filepath.Clean(root))
+	return path == root || strings.HasPrefix(path, strings.TrimRight(root, string(filepath.Separator))+string(filepath.Separator))
+}
+
+func (s *syncer) localFiles() (map[string]string, error) {
+	local := map[string]string{}
+	e := filepath.WalkDir(s.dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == s.dir {
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".coppy-") || s.excludes(p) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		rel, _ := filepath.Rel(s.dir, p)
+		rel = filepath.ToSlash(rel)
+		if !safe(rel) {
+			return fmt.Errorf("non-portable path %q", rel)
+		}
+		h, err := digest(p)
+		if err == nil {
+			local[rel] = h
+		}
+		return err
+	})
+	if e != nil {
+		return nil, e
+	}
+	return local, nil
 }

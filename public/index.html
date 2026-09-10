@@ -73,7 +73,7 @@
         <p id="ca-fingerprint" class="my-2 break-all font-mono"></p>
         <p>Run in PowerShell: <code id="windows-sync-command" class="break-all">.\coppy-windows-amd64.exe --peer SERVER_IP .</code></p>
         <p>Mac: <code id="mac-sync-command" class="break-all">chmod +x coppy-darwin-arm64 &amp;&amp; ./coppy-darwin-arm64 --peer SERVER_IP .</code></p>
-        <p class="mt-1">Runs in the foreground, syncing the current folder both ways every 3 seconds. Add -b before the folder to run in the background. Replace . with another folder to sync it. Run on both machines. Local deletions are restored from the server.</p>
+        <p class="mt-1">Runs in the foreground, receiving remote changes over WebSockets and scanning the current folder every 3 seconds. Add -b before the folder to run in the background. Replace . with another folder to sync it. Run the client on other machines; the server already syncs its local folder. Local deletions are restored from the server.</p>
       </div>
     </section>
 

@@ -22,8 +22,16 @@ func TestModes(t *testing.T) {
 	if err != nil || o.Listen != "127.0.0.1:3737" || o.Background || o.Peer != "" {
 		t.Fatal(o, err)
 	}
-	o, err = parseOptions([]string{"--peer", "192.168.1.20", "."})
 	cwd, _ := os.Getwd()
+	if o.Dir != cwd {
+		t.Fatal("server must sync cwd", o.Dir)
+	}
+	o, err = parseOptions([]string{"."})
+	if err != nil || o.Dir != cwd {
+		t.Fatal(o, err)
+	}
+	o, err = parseOptions([]string{"--peer", "192.168.1.20", "."})
+
 	if err != nil || o.Dir != cwd || o.Background {
 		t.Fatal(o, err)
 	}
@@ -31,7 +39,7 @@ func TestModes(t *testing.T) {
 	if err != nil || !o.Background {
 		t.Fatal(o, err)
 	}
-	for _, args := range [][]string{{"--peer", ""}, {"--peer", "localhost", "--dir", "x", "."}, {"--once"}, {"--peer", "localhost", "-b", "--once"}, {"."}} {
+	for _, args := range [][]string{{"--peer", ""}, {"--peer", "localhost", "--dir", "x", "."}, {"--once"}, {"--peer", "localhost", "-b", "--once"}} {
 		if _, err := parseOptions(args); err == nil {
 			t.Fatal("accepted", args)
 		}
@@ -89,8 +97,15 @@ func TestEmbeddedCertificateAndProcesses(t *testing.T) {
 	}
 	address := listener.Addr().String()
 	listener.Close()
+	serverFolder := filepath.Join(dir, "server-shared")
+	if err := os.Mkdir(serverFolder, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(serverFolder, "background-server.txt"), []byte("server sync"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	data := filepath.Join(dir, "server")
-	server := exec.Command(bin, "--listen", address, "--data", data, "--tls-dir", o.TLSDir, "-b")
+	server := exec.Command(bin, "--dir", serverFolder, "--interval", "1s", "--listen", address, "--data", data, "--tls-dir", o.TLSDir, "-b")
 	output, err := server.CombinedOutput()
 	if err != nil {
 		t.Fatalf("server background: %v %s", err, output)
@@ -110,8 +125,18 @@ func TestEmbeddedCertificateAndProcesses(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Shared files") {
 		t.Fatal("standalone web UI missing")
 	}
+	waitFile(t, filepath.Join(serverFolder, ".coppy-state.json"))
+	response, err = client.Get("https://" + address + "/api/file?path=background-server.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 || string(body) != "server sync" {
+		t.Fatal("background server did not sync selected folder")
+	}
 	// The launcher must report a startup failure, not success, when the port is taken.
-	duplicate := exec.Command(bin, "--listen", address, "--data", filepath.Join(dir, "duplicate"), "--tls-dir", o.TLSDir, "-b")
+	duplicate := exec.Command(bin, "--dir", serverFolder, "--listen", address, "--data", filepath.Join(dir, "duplicate"), "--tls-dir", o.TLSDir, "-b")
 	if out, err := duplicate.CombinedOutput(); err == nil {
 		t.Fatalf("accepted occupied port: %s", out)
 	}

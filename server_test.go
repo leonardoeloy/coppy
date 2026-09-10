@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/coder/websocket"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -190,24 +191,22 @@ func TestClipboardWebAndPersistence(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", s.URL+"/api/events", nil)
-	events, err := c.Do(req)
+	events, _, err := websocket.Dial(ctx, "wss://"+strings.TrimPrefix(s.URL, "https://")+"/api/ws", &websocket.DialOptions{HTTPClient: c})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer events.Body.Close()
+	defer events.CloseNow()
 	lines := make(chan string, 1)
 	go func() {
-		buf := make([]byte, 4096)
-		all := ""
 		for {
-			n, e := events.Body.Read(buf)
-			all += string(buf[:n])
-			if strings.Contains(all, "event: clip\n") {
-				lines <- all
+			_, b, e := events.Read(ctx)
+			if e != nil {
 				return
 			}
-			if e != nil {
+			var m struct{ Event string }
+			json.Unmarshal(b, &m)
+			if m.Event == "clip" {
+				lines <- string(b)
 				return
 			}
 		}
@@ -224,10 +223,10 @@ func TestClipboardWebAndPersistence(t *testing.T) {
 			t.Fatal(text)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("missing SSE")
+		t.Fatal("missing WebSocket event")
 	}
 	cancel()
-	events.Body.Close()
+	events.CloseNow()
 	second, err := newApp(o, a.ca)
 	if err != nil {
 		t.Fatal(err)

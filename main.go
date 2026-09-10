@@ -23,12 +23,12 @@ func parseOptions(args []string) (options, error) {
 	home, _ := os.UserHomeDir()
 	o := options{}
 	f := flag.NewFlagSet("coppy", flag.ContinueOnError)
-	f.StringVar(&o.Peer, "peer", "", "HTTPS peer; omitted starts the server")
-	f.StringVar(&o.Dir, "dir", filepath.Join(home, "Coppy"), "Folder to sync (or positional folder)")
+	f.StringVar(&o.Peer, "peer", "", "HTTPS peer; omitted serves and syncs a local folder")
+	f.StringVar(&o.Dir, "dir", filepath.Join(home, "Coppy"), "Folder to sync: server defaults to current directory, client to ~/Coppy")
 	f.StringVar(&o.CA, "ca", "", "Override embedded public CA with a PEM file")
 	f.BoolVar(&o.Background, "b", false, "Run in background")
 	f.BoolVar(&o.Once, "once", false, "Sync once and exit")
-	f.DurationVar(&o.Interval, "interval", 3*time.Second, "Sync polling interval")
+	f.DurationVar(&o.Interval, "interval", 3*time.Second, "Local folder scan/retry interval")
 	f.StringVar(&o.Listen, "listen", "127.0.0.1:3737", "Server bind address; use 0.0.0.0:3737 for LAN")
 	f.StringVar(&o.Data, "data", ".coppy-server", "Server data directory")
 	f.StringVar(&o.DB, "db", os.Getenv("COPPY_DB"), "SQLite path (defaults inside --data)")
@@ -42,24 +42,27 @@ func parseOptions(args []string) (options, error) {
 	set := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { set[v.Name] = true })
 	if o.Interval < time.Second || f.NArg() > 1 || (f.NArg() > 0 && set["dir"]) || (set["peer"] && o.Peer == "") {
-		return o, fmt.Errorf("invalid options; use coppy --peer IP [-b] [folder]")
+		return o, fmt.Errorf("invalid options; use coppy [-b] [folder] or coppy --peer IP [-b] [folder]")
 	}
 	if o.Peer == "" {
-		if f.NArg() > 0 || set["dir"] || o.Once || set["ca"] {
-			return o, fmt.Errorf("folder, --dir, --ca and --once require --peer")
+		if o.Once || set["ca"] {
+			return o, fmt.Errorf("--ca and --once require --peer")
+		}
+		if !set["dir"] {
+			o.Dir = "."
 		}
 	} else {
 		if o.Build {
 			return o, fmt.Errorf("--build-downloads cannot be combined with --peer")
-		}
-		if f.NArg() == 1 {
-			o.Dir = f.Arg(0)
 		}
 		var err error
 		o.Peer, err = peerURL(o.Peer)
 		if err != nil {
 			return o, err
 		}
+	}
+	if f.NArg() == 1 {
+		o.Dir = f.Arg(0)
 	}
 	if o.Build && o.Background {
 		return o, fmt.Errorf("builds run in the foreground")
@@ -121,7 +124,7 @@ func runMain() error {
 }
 func launchBackground(o options) error {
 	dir := o.Data
-	args := []string{"--listen", o.Listen, "--data", o.Data, "--db", o.DB, "--files", o.Files, "--tls-dir", o.TLSDir, "--downloads", o.Downloads}
+	args := []string{"--dir", o.Dir, "--interval", o.Interval.String(), "--listen", o.Listen, "--data", o.Data, "--db", o.DB, "--files", o.Files, "--tls-dir", o.TLSDir, "--downloads", o.Downloads}
 	if o.Peer != "" {
 		dir = o.Dir
 		args = []string{"--peer", o.Peer, "--dir", o.Dir, "--ca", o.CA, "--interval", o.Interval.String()}
