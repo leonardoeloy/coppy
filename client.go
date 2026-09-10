@@ -1,22 +1,19 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -30,111 +27,64 @@ type syncer struct {
 	baseline  map[string]string
 }
 
-func main() {
-	home, _ := os.UserHomeDir()
-	dir := flag.String("dir", filepath.Join(home, "Coppy"), "Folder to synchronize")
-	peer := flag.String("peer", "", "Server IP[:port] or URL")
-	foreground := flag.Bool("foreground", false, "Run in foreground")
-	once := flag.Bool("once", false, "Synchronize once and exit")
-	interval := flag.Duration("interval", 3*time.Second, "Polling interval")
-	flag.Parse()
-	dirSet, peerSet := false, false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "dir" {
-			dirSet = true
-		}
-		if f.Name == "peer" {
-			peerSet = true
-		}
-	})
-	invalid := *interval < time.Second
-	base := *peer
-	if peerSet {
-		invalid = invalid || *peer == "" || flag.NArg() > 1 || (dirSet && flag.NArg() > 0)
-		if flag.NArg() == 1 {
-			*dir = flag.Arg(0)
-		}
-	} else {
-		invalid = invalid || flag.NArg() != 1
-		base = flag.Arg(0)
-	}
-	if invalid {
-		fmt.Fprintln(os.Stderr, "Usage: coppy [--foreground] [--once] --peer IP[:port] [folder]\n       coppy [--dir folder] [--foreground] [--once] IP[:port]\nSpecify either a positional folder or --dir, not both.")
-		os.Exit(2)
-	}
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	u, err := url.Parse(base)
-	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		log.Fatal("Invalid server address")
-	}
-	if u.Port() == "" {
-		u.Host = u.Host + ":3737"
-	}
-	base = strings.TrimRight(u.String(), "/")
-	abs, err := filepath.Abs(*dir)
-	must(err)
-	must(os.MkdirAll(abs, 0700))
-	if !*foreground && !*once {
-		// Check connectivity before reporting a background process.
-		c := http.Client{Timeout: 10 * time.Second}
-		r, e := c.Get(base + "/api/files")
-		must(e)
-		r.Body.Close()
-		if r.StatusCode != 200 {
-			log.Fatal("Server unavailable: ", r.Status)
-		}
-		exe, e := os.Executable()
-		must(e)
-		f, e := os.OpenFile(filepath.Join(abs, ".coppy-sync.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		must(e)
-		defer f.Close()
-		cmd := exec.Command(exe, "--foreground", "--dir", abs, "--interval", interval.String(), base)
-		cmd.Stdout = f
-		cmd.Stderr = f
-		cmd.SysProcAttr = detach()
-		must(cmd.Start())
-		fmt.Printf("Coppy syncing %s in background (PID %d). Log: %s\n", abs, cmd.Process.Pid, f.Name())
-		return
-	}
-	lock := filepath.Join(abs, ".coppy-lock")
-	err = os.Mkdir(lock, 0700)
+func runSync(ctx context.Context, base, dir, ca string, once bool, interval time.Duration) error {
+	client, err := secureClient(ca)
 	if err != nil {
-		log.Fatal("Folder already locked; if no client is running, remove ", lock)
+		return err
+	}
+	defer client.CloseIdleConnections()
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	lock := filepath.Join(dir, ".coppy-lock")
+	if err = os.Mkdir(lock, 0700); err != nil {
+		return fmt.Errorf("folder is locked; if no client is running, remove %s", lock)
 	}
 	defer os.Remove(lock)
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	go func() { <-signals; os.Remove(lock); os.Exit(0) }()
-	s := syncer{base, abs, &http.Client{Timeout: 30 * time.Minute}, map[string]string{}}
-	statePath := filepath.Join(abs, ".coppy-state.json")
+	client.Transport = contextTransport{ctx, client.Transport}
+	s := syncer{base, dir, client, map[string]string{}}
+	statePath := filepath.Join(dir, ".coppy-state.json")
 	if b, e := os.ReadFile(statePath); e == nil {
-		must(json.Unmarshal(b, &s.baseline))
+		if e = json.Unmarshal(b, &s.baseline); e != nil {
+			return e
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	probe, err := client.Get(base + "/api/files")
+	if err != nil {
+		return err
+	}
+	probe.Body.Close()
+	if probe.StatusCode != 200 {
+		return fmt.Errorf("server: %s", probe.Status)
+	}
+	if err = markReady(); err != nil {
+		return err
 	}
 	for {
 		err = s.run()
+		if err == nil {
+			var b []byte
+			b, err = json.Marshal(s.baseline)
+			if err == nil {
+				err = os.WriteFile(statePath+".tmp", b, 0600)
+			}
+			if err == nil {
+				err = os.Rename(statePath+".tmp", statePath)
+			}
+		}
+		if once {
+			return err
+		}
 		if err != nil {
 			log.Print(err)
-		} else {
-			b, e := json.Marshal(s.baseline)
-			must(e)
-			must(os.WriteFile(statePath+".tmp", b, 0600))
-			must(os.Rename(statePath+".tmp", statePath))
 		}
-		if *once {
-			if err != nil {
-				os.Remove(lock)
-				os.Exit(1)
-			}
-			return
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(interval):
 		}
-		time.Sleep(*interval)
-	}
-}
-func must(err error) {
-	if err != nil {
-		log.Fatal(err)
 	}
 }
 func digest(p string) (string, error) {
@@ -357,4 +307,19 @@ func (s *syncer) download(p, h, old string) error {
 		return fmt.Errorf("local changed: %s", p)
 	}
 	return os.Rename(tmp.Name(), dest)
+}
+
+type contextTransport struct {
+	ctx   context.Context
+	inner http.RoundTripper
+}
+
+func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.inner.RoundTrip(r.WithContext(t.ctx))
+}
+
+func (t contextTransport) CloseIdleConnections() {
+	if c, ok := t.inner.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }

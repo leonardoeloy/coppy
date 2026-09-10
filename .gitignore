@@ -1,8 +1,24 @@
-node_modules/
-coppy.db
-coppy.db-shm
-coppy.db-wal
-.DS_Store
+# Go executables and test/build output
+/dist/
+/coppy
+/coppy-*
+/*.exe
+*.test
+/coverage.out
 
-data/
-dist/
+# Local server storage (including legacy Node storage)
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db.lock/
+
+# Reserved Coppy state, logs, locks, and temporary files/directories
+.coppy-*
+
+# Private certificate keys, including custom TLS directories
+*-key.pem
+
+# macOS metadata
+.DS_Store

@@ -347,7 +347,20 @@ $('file-upload').addEventListener('change', async (event) => {
 loadFiles();
 setInterval(loadFiles, 5000);
 
-// Use the address the user opened so commands work from the other computer.
-const syncPeer = JSON.stringify(window.location.origin);
-$('windows-sync-command').textContent = `.\\coppy-windows-amd64.exe --peer ${syncPeer} .`;
-$('mac-sync-command').textContent = `chmod +x coppy-darwin-arm64 && ./coppy-darwin-arm64 --peer ${syncPeer} .`;
+// Downloaded executables embed this server’s public CA.
+async function loadTLSSetup() {
+  try {
+    const res = await fetch('/api/tls');
+    if (!res.ok) throw new Error('Could not load certificate setup. Reload to try again.');
+    const tls = await res.json();
+    const syncPeer = JSON.stringify(window.location.origin);
+    $('windows-sync-command').textContent = `.\\coppy-windows-amd64.exe --peer ${syncPeer} .`;
+    $('mac-sync-command').textContent = `chmod +x coppy-darwin-arm64 && ./coppy-darwin-arm64 --peer ${syncPeer} .`;
+    $('ca-download').classList.toggle('hidden', !tls.localCA);
+    $('tls-setup').textContent = tls.localCA
+      ? 'Desktop downloads include this server’s public certificate—no --ca file needed. Your browser still needs to trust the public CA. Compare its fingerprint with the server terminal before trusting it.'
+      : 'HTTPS enabled. The client verifies the server certificate.';
+    $('ca-fingerprint').textContent = tls.fingerprint ? `CA SHA-256: ${tls.fingerprint}` : '';
+  } catch (err) { $('tls-setup').textContent = err.message; }
+}
+loadTLSSetup();
