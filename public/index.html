@@ -1,105 +1,84 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5f3ed" />
   <title>coppy — shared clipboard &amp; files</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    ::-webkit-scrollbar { width: 10px; height: 10px; }
-    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 6px; }
-  </style>
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
-<body class="h-full bg-zinc-950 text-zinc-100 antialiased">
+<body>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="Coppy home"><img src="/logo.png" alt="" width="38" height="38" /><span>coppy<span class="brand-period">.</span></span></a>
+      <nav aria-label="Workspace"><a href="#clipboard">Clipboard</a><a href="#shared-files">Files</a><a href="#desktop">Get the app <span aria-hidden="true">↗</span></a></nav>
+      <span id="conn" class="connection" role="status">Connecting…</span>
+    </div>
+  </header>
 
-  <div class="mx-auto flex h-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-
-    <!-- header -->
-    <header class="flex flex-wrap items-center gap-3">
-      <h1 class="text-lg font-semibold tracking-tight">coppy</h1>
-
-      <span id="conn"
-            class="rounded-full border border-zinc-800 px-2 py-0.5 text-xs text-zinc-500">
-        connecting…
-      </span>
-
-      <div class="ml-auto flex items-center gap-3">
-        <label class="flex cursor-pointer select-none items-center gap-2 text-xs text-zinc-400">
-          <input id="autocopy" type="checkbox" checked
-                 class="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 accent-emerald-500" />
-          auto-copy
-        </label>
-        <button id="rename"
-                class="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-600 hover:text-white">
-          this device: <span id="me-name" class="font-medium">…</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- devices -->
-    <div id="devices" class="flex flex-wrap gap-2"></div>
-
-    <!-- composer -->
-    <section class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-      <textarea id="input" rows="3" placeholder="Paste here (⌘V / Ctrl+V) — or type and hit ⌘↵"
-        class="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-600/60"></textarea>
-      <div class="mt-2 flex items-center gap-3">
-        <p class="text-xs text-zinc-500">
-          Pasting anywhere on this page sends to every other device.
-        </p>
-        <button id="send"
-          class="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40">
-          Send
-        </button>
-      </div>
+  <main id="workspace" class="workspace">
+    <section class="welcome" aria-labelledby="welcome-title">
+      <div><p class="eyebrow">YOUR DESK, TOGETHER</p><h1 id="welcome-title">A little less back-and-forth.</h1><p class="intro">One place for the text and files you move between machines.</p></div>
+      <div class="welcome-note"><span aria-hidden="true">↔</span> Copy here.<br />Pick it up there.</div>
     </section>
 
-    <section class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-      <div class="flex items-center gap-3"><h2 class="font-medium">Shared files</h2>
-        <label class="ml-auto cursor-pointer text-sm text-emerald-400">Upload files<input id="file-upload" type="file" multiple class="hidden" /></label></div>
-      <p id="file-status" role="status" class="my-2 text-xs text-zinc-400">Files sync to the folder selected by each connected desktop client.</p>
-      <ul id="files" class="max-h-48 space-y-2 overflow-auto text-sm"></ul>
-      <div class="mt-4 border-t border-zinc-800 pt-3 text-xs text-zinc-400">
-        <h3 class="text-sm font-medium text-zinc-100">Download desktop sync</h3>
-        <p class="mt-1">Choose your computer, download the app, then run it in the folder you want to share.</p>
-        <div class="my-2 flex flex-wrap gap-3">
-          <a href="/downloads/coppy-windows-amd64.exe" download class="rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white hover:bg-emerald-500">Download Windows x64</a>
-          <a href="/downloads/coppy-windows-arm64.exe" download class="rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white hover:bg-emerald-500">Download Windows ARM64</a>
-          <a href="/downloads/coppy-darwin-arm64" download class="rounded-lg border border-zinc-600 px-3 py-2 font-medium text-zinc-100 hover:bg-zinc-800">Download Mac Apple silicon</a>
-          <a href="/downloads/coppy-darwin-amd64" download class="rounded-lg border border-zinc-600 px-3 py-2 font-medium text-zinc-100 hover:bg-zinc-800">Download Mac Intel</a>
+    <section class="device-strip" aria-label="Devices">
+      <div class="device-label"><span class="tiny-label">AROUND YOUR DESK</span><span id="device-summary" class="subtle">Connecting your devices…</span></div>
+      <div id="devices" class="devices"></div>
+      <button id="rename" class="rename-button" title="Rename this device"><span class="subtle">This device</span><span id="me-name">…</span><span aria-hidden="true">✎</span></button>
+    </section>
+
+    <div class="workspace-grid">
+      <section id="clipboard" class="card clipboard-card" aria-labelledby="clipboard-title">
+        <div class="card-heading"><div class="heading-group"><span class="section-icon" aria-hidden="true">❝</span><div><h2 id="clipboard-title">The shared clipboard</h2><p>A thought, a link, a handy bit of text.</p></div></div><label class="auto-copy"><input id="autocopy" type="checkbox" checked />Auto-copy</label></div>
+        <div class="composer">
+          <label for="input" class="sr-only">Text to share with your devices</label>
+          <textarea id="input" rows="4" placeholder="What would you like to pass along?"></textarea>
+          <div class="composer-footer"><span><kbd>⌘</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</span><button id="send" class="button primary">Send to devices <span aria-hidden="true">↗</span></button></div>
         </div>
-        <p id="tls-setup" class="my-2">Desktop binaries include this server’s public certificate.</p>
-        <a id="ca-download" href="/downloads/coppy-ca.pem" download class="hidden my-2 inline-block text-emerald-400 hover:underline">Download public CA certificate</a>
-        <p id="ca-fingerprint" class="my-2 break-all font-mono"></p>
-        <p>Run in PowerShell: <code id="windows-sync-command" class="break-all">.\coppy-windows-amd64.exe --peer SERVER_IP .</code></p>
-        <p>Mac: <code id="mac-sync-command" class="break-all">chmod +x coppy-darwin-arm64 &amp;&amp; ./coppy-darwin-arm64 --peer SERVER_IP .</code></p>
-        <p class="mt-1">Runs in the foreground, receiving remote changes over WebSockets and scanning the current folder every 3 seconds. Add -b before the folder to run in the background. Replace . with another folder to sync it. Run the client on other machines; the server already syncs its local folder. Local deletions are restored from the server.</p>
-      </div>
-    </section>
+        <div class="history-heading"><h3>Recently shared <span id="clip-count" class="count">0</span></h3><button id="clear" class="text-button danger">Clear history</button></div>
+        <ul id="history" class="history"></ul>
+        <div id="empty" class="empty-state hidden"><span class="empty-symbol" aria-hidden="true">✎</span><p>Your clipboard starts here.</p><span>Paste something above. It’ll be waiting on your other devices.</span></div>
+        <div class="card-footnote"><span aria-hidden="true">↔</span> Paste anywhere on this page to share with your devices.</div>
+      </section>
 
-    <!-- history -->
-    <section class="flex min-h-0 flex-1 flex-col">
-      <div class="mb-2 flex items-center gap-3">
-        <h2 class="text-xs font-medium uppercase tracking-wider text-zinc-500">History</h2>
-        <button id="clear"
-                class="ml-auto text-xs text-zinc-600 hover:text-red-400">clear all</button>
-      </div>
-      <ul id="history" class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1"></ul>
-      <p id="empty" class="hidden py-10 text-center text-sm text-zinc-600">
-        Nothing yet. Copy something on another machine and paste it here.
-      </p>
-    </section>
-  </div>
+      <aside class="side-column">
+        <section id="shared-files" class="card files-card" aria-labelledby="files-title">
+          <div class="card-heading"><div class="heading-group"><span class="section-icon file-section-icon" aria-hidden="true">▤</span><div><h2 id="files-title">Shared files <span id="file-count" class="count">0</span></h2><p>A little shelf for your everyday files.</p></div></div></div>
+          <label class="upload-button"><span aria-hidden="true">＋</span> Add files<input id="file-upload" type="file" multiple aria-label="Upload files" /></label>
+          <ul id="files" class="files"></ul>
+          <p id="file-status" role="status" class="card-footnote">Files appear in the folders your devices sync.</p>
+        </section>
 
-  <!-- manual-copy prompt: shown when the browser blocks silent clipboard writes -->
-  <button id="banner"
-    class="fixed inset-x-0 bottom-0 hidden w-full bg-emerald-600 px-4 py-3 text-center text-sm font-medium text-white hover:bg-emerald-500">
-    New clip from <span id="banner-src"></span> — click anywhere here to copy it
-  </button>
+        <section id="desktop" class="card desktop-card" aria-labelledby="desktop-title">
+          <div class="desktop-heading"><span class="desktop-symbol" aria-hidden="true">↙ ↗</span><span class="tiny-label">TAKE COPPY WITH YOU</span></div>
+          <h2 id="desktop-title">Make yourself at home.</h2>
+          <p>Get the app to keep a folder in sync.<br />Your files will find their way.</p>
+          <div class="downloads">
+            <a href="/downloads/coppy-windows-amd64.exe" download aria-label="Download Windows x64"><span>Windows <small>x64</small></span><span aria-hidden="true">↓</span></a>
+            <a href="/downloads/coppy-darwin-arm64" download aria-label="Download Mac Apple silicon"><span>Mac <small>Apple silicon</small></span><span aria-hidden="true">↓</span></a>
+            <a href="/downloads/coppy-windows-arm64.exe" download aria-label="Download Windows ARM64"><span>Windows <small>ARM64</small></span><span aria-hidden="true">↓</span></a>
+            <a href="/downloads/coppy-darwin-amd64" download aria-label="Download Mac Intel"><span>Mac <small>Intel</small></span><span aria-hidden="true">↓</span></a>
+          </div>
+          <details class="setup"><summary>Getting set up <span aria-hidden="true">＋</span></summary><div class="setup-body">
+            <p>Open a terminal in the folder you want to share, then run:</p>
+            <label>Windows PowerShell</label><code id="windows-sync-command">.\coppy-windows-amd64.exe --peer SERVER_IP .</code>
+            <label>macOS (Apple silicon)</label><code id="mac-sync-command">chmod +x coppy-darwin-arm64 &amp;&amp; ./coppy-darwin-arm64 --peer SERVER_IP .</code>
+            <p>Use the matching filename for ARM64 Windows or Intel Mac. Replace <code class="inline-code">.</code> with another folder, or add <code class="inline-code">-b</code> before it to run in the background. The server already syncs its own folder. Deleted local files are restored from the shared copy.</p>
+            <p id="tls-setup">Desktop downloads include this server’s public certificate.</p>
+            <a id="ca-download" href="/downloads/coppy-ca.pem" download class="hidden">Download public CA certificate</a>
+            <p id="ca-fingerprint" class="fingerprint"></p>
+          </div></details>
+        </section>
+      </aside>
+    </div>
+    <footer class="page-footer"><span><span class="lock-icon" aria-hidden="true">▣</span> Encrypted connections. A shared space for your devices.</span><span>Less sending. More doing.</span></footer>
+  </main>
 
-  <div id="toast"
-    class="pointer-events-none fixed bottom-4 left-1/2 hidden -translate-x-1/2 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 shadow-lg"></div>
-
+  <button id="banner" class="copy-banner hidden">New clip from <span id="banner-src"></span> — click here to copy it</button>
+  <div id="toast" class="toast hidden" role="status"></div>
   <script src="/app.js"></script>
 </body>
 </html>

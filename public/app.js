@@ -70,16 +70,16 @@ function connect() {
   openSocket();
   events.addEventListener('file', loadFiles);
 
-  events.addEventListener('open', () => setConn('live', 'text-emerald-400 border-emerald-800'));
-  events.addEventListener('error', () => setConn('reconnecting…', 'text-amber-400 border-amber-900'));
+  events.addEventListener('open', () => setConn('Connected', 'is-live'));
+  events.addEventListener('error', () => setConn('reconnecting…', 'is-reconnecting'));
 
   events.addEventListener('hello', (e) => {
     state.me = JSON.parse(e.data).device;
     // Refresh after reconnection to recover any events missed while offline.
-    loadState().catch(() => setConn('reconnecting…', 'text-amber-400 border-amber-900'));
+    loadState().catch(() => setConn('reconnecting…', 'is-reconnecting'));
     loadFiles();
     el.meName.textContent = state.me.name;
-    setConn('live', 'text-emerald-400 border-emerald-800');
+    setConn('Connected', 'is-live');
   });
 
   events.addEventListener('presence', (e) => {
@@ -98,7 +98,7 @@ function connect() {
   events.addEventListener('clip', (e) => {
     const { clip, device } = JSON.parse(e.data);
     state.devices.set(device.id, device);
-    state.clips.push(clip);
+    if (!state.clips.some(c => c.id === clip.id)) state.clips.push(clip);
     renderDevices();
     renderHistory();
 
@@ -120,7 +120,7 @@ function connect() {
 
 function setConn(text, classes) {
   el.conn.textContent = text;
-  el.conn.className = `rounded-full border px-2 py-0.5 text-xs ${classes}`;
+  el.conn.className = `connection ${classes}`;
 }
 
 // ------------------------------------------------------------------ sending
@@ -242,16 +242,14 @@ async function writeClipboard(text) {
 
 function renderDevices() {
   el.devices.innerHTML = '';
+  const onlineCount = [...state.devices.values()].filter(d => state.online.has(d.id)).length;
+  $('device-summary').textContent = `${onlineCount} ${onlineCount === 1 ? 'device' : 'devices'} online`;
   for (const d of state.devices.values()) {
     const online = state.online.has(d.id);
     const chip = document.createElement('div');
-    chip.className =
-      'group flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1.5 text-xs';
-    chip.title = `${d.userAgent}\nIP ${d.ip}\nfingerprint ${d.fingerprint}`;
-    chip.innerHTML = `
-      <span class="h-2 w-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-zinc-700'}"></span>
-      <span class="${color(d.id).text} font-medium">${escapeHtml(d.name)}</span>
-      ${d.id === state.me.id ? '<span class="text-zinc-600">(you)</span>' : ''}`;
+    chip.className = `device-chip${online ? ' online' : ''}`;
+    chip.title = `${d.name} — ${online ? 'Online' : 'Offline'}`;
+    chip.innerHTML = `<span class="device-dot" aria-hidden="true"></span><span>${escapeHtml(d.name)}</span>${d.id === state.me.id ? '<span class="device-you">you</span>' : ''}`;
     el.devices.appendChild(chip);
   }
 }
@@ -260,21 +258,25 @@ function renderHistory() {
   el.history.innerHTML = '';
   const clips = [...state.clips].reverse();
   el.empty.classList.toggle('hidden', clips.length > 0);
+  $('clip-count').textContent = clips.length;
+  el.clear.disabled = clips.length === 0;
 
   for (const clip of clips) {
     const c = color(clip.deviceId);
     const li = document.createElement('li');
-    li.className = 'rounded-xl border border-zinc-800 bg-zinc-900/40 p-3';
+    li.className = 'clip';
+    li.style.setProperty('--avatar-bg', c.bg);
+    li.style.setProperty('--avatar-ink', c.text);
     li.innerHTML = `
-      <div class="mb-1.5 flex items-center gap-2 text-xs">
-        <span class="h-1.5 w-1.5 rounded-full ${c.bg}"></span>
-        <span class="${c.text} font-medium">${escapeHtml(deviceName(clip.deviceId))}</span>
-        ${clip.deviceId === state.me.id ? '<span class="text-zinc-600">(you)</span>' : ''}
-        <time class="text-zinc-600">${when(clip.createdAt)}</time>
-        <button data-act="copy" class="ml-auto text-zinc-500 hover:text-emerald-400">copy</button>
-        <button data-act="del" class="text-zinc-600 hover:text-red-400">delete</button>
+      <div class="clip-meta">
+        <span class="avatar" aria-hidden="true">${escapeHtml(deviceName(clip.deviceId).slice(0, 1).toUpperCase())}</span>
+        <span class="clip-author">${escapeHtml(deviceName(clip.deviceId))}</span>
+        ${clip.deviceId === state.me.id ? '<span class="device-you">you</span>' : ''}
+        <time datetime="${new Date(clip.createdAt).toISOString()}">${when(clip.createdAt)}</time>
+        <button data-act="copy">Copy</button>
+        <button data-act="del" aria-label="Delete clip">Delete</button>
       </div>
-      <pre class="max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-zinc-300">${escapeHtml(clip.text)}</pre>`;
+      <pre>${escapeHtml(clip.text)}</pre>`;
 
     li.querySelector('[data-act="copy"]').addEventListener('click', async () => {
       state.lastText = clip.text;
@@ -292,12 +294,11 @@ function renderHistory() {
 const deviceName = (id) => state.devices.get(id)?.name || 'unknown device';
 
 const PALETTE = [
-  { text: 'text-emerald-400', bg: 'bg-emerald-400' },
-  { text: 'text-sky-400', bg: 'bg-sky-400' },
-  { text: 'text-violet-400', bg: 'bg-violet-400' },
-  { text: 'text-amber-400', bg: 'bg-amber-400' },
-  { text: 'text-rose-400', bg: 'bg-rose-400' },
-  { text: 'text-teal-400', bg: 'bg-teal-400' },
+  { text: '#526d46', bg: '#e5eedd' },
+  { text: '#587185', bg: '#e6edf2' },
+  { text: '#82704a', bg: '#f2ebdc' },
+  { text: '#84666c', bg: '#f2e6e8' },
+  { text: '#6d6585', bg: '#eeeaf4' },
 ];
 
 function color(id = '') {
@@ -335,15 +336,27 @@ async function loadFiles() {
     const res = await fetch('/api/files');
     if (!res.ok) throw new Error('Could not load files');
     const { files } = await res.json();
+    $('file-count').textContent = files.length;
     $('files').replaceChildren(...files.map(file => {
       const li = document.createElement('li');
       const a = document.createElement('a');
       a.href = '/api/file?path=' + encodeURIComponent(file.path);
       a.download = file.path.split('/').pop();
-      a.className = 'text-emerald-400 hover:underline break-all';
-      a.textContent = `${file.path} (${new Intl.NumberFormat().format(file.size)} bytes) ↓`;
+      li.className = 'file-row';
+      a.className = 'file-link';
+      const icon = document.createElement('span');
+      icon.className = 'file-icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = file.path.includes('.') ? file.path.split('.').pop().slice(0, 4).toUpperCase() : 'FILE';
+      const info = document.createElement('span'); info.className = 'file-info';
+      const name = document.createElement('span'); name.className = 'file-name'; name.textContent = file.path;
+      const size = document.createElement('span'); size.className = 'file-size';
+      size.textContent = file.size < 1024 ? `${file.size} bytes` : file.size < 1048576 ? `${(file.size / 1024).toFixed(1)} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
+      const arrow = document.createElement('span'); arrow.className = 'download-arrow'; arrow.textContent = '↓'; arrow.setAttribute('aria-hidden', 'true');
+      a.setAttribute('aria-label', `Download ${file.path}`);
+      info.append(name, size); a.append(icon, info, arrow);
       li.append(a); return li;
     }));
+    if (!files.length) { const empty = document.createElement('li'); empty.className = 'empty-file'; empty.textContent = 'A clean shelf. Add your first file above.'; $('files').append(empty); }
   } catch (err) { $('file-status').textContent = err.message; }
 }
 $('file-upload').addEventListener('change', async (event) => {

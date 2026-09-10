@@ -1,6 +1,37 @@
+<img src="public/logo.png" alt="Coppy logo" width="96" height="96">
+
 # coppy
 
 A shared clipboard and file folder for the machines on your desk. One Go executable serves the web app while syncing a local folder, or syncs a folder with another Coppy server. No Node.js, browser extension, or runtime installation is required.
+
+## Web app
+
+Paste text, see connected devices, upload shared files, and download the desktop client from one page. The responsive interface, styles, and logo are bundled in the Go binary, so the page needs no external CDN. This screenshot uses sample clipboard entries and files.
+
+![Coppy web app showing shared clipboard entries, device names, shared-file downloads, and Windows/macOS client downloads](docs/screenshot.png)
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    browser["Web browser"]
+    subgraph serverMachine["Server machine"]
+        server["Coppy Go server + folder sync"]
+        serverFolder["Local shared folder"]
+        storage[("SQLite + file blobs")]
+        server <--> serverFolder
+        server --- storage
+    end
+    subgraph peerMachine["Another Mac or Windows machine"]
+        client["Coppy sync client"]
+        peerFolder["Local shared folder"]
+        client <--> peerFolder
+    end
+    browser <-->|"HTTPS + WSS"| server
+    client <-->|"HTTPS + WSS"| server
+```
+
+WebSockets (`WSS`) deliver clipboard and file-change notifications. HTTPS carries file bytes, web actions, and manifests. Both machines synchronize their local folders through the server; the server machine needs no separate client process.
 
 ## Start a server
 
