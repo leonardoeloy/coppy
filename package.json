@@ -1,11 +1,13 @@
 {
   "name": "coppy",
   "version": "1.0.0",
-  "description": "Multi-device clipboard sync over the LAN",
+  "description": "Shared clipboard, file downloads, and bidirectional folder sync over the LAN",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node --experimental-sqlite server.js",
+    "build:sync": "bash scripts/build-sync.sh",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=22.5.0"

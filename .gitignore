@@ -3,3 +3,6 @@ coppy.db
 coppy.db-shm
 coppy.db-wal
 .DS_Store
+
+data/
+dist/

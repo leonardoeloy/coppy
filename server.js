@@ -9,6 +9,8 @@ import {
   addClip, recentClips, deleteClip, clearClips,
 } from './db.js';
 
+import { filesHandler } from './files.js';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(here, 'public');
 const PORT = Number(process.env.PORT) || 3737;
@@ -23,6 +25,16 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
 
   try {
+    if (path === '/api/files' || path === '/api/file') return await filesHandler(req, res, url, json, broadcast);
+    if (path.startsWith('/downloads/') && req.method === 'GET') {
+      const name = path.slice('/downloads/'.length);
+      if (!/^coppy-(windows|darwin)-(amd64|arm64)(\.exe)?$/.test(name)) return json(res, 404, { error: 'not found' });
+      try {
+        const data = await readFile(join(here, 'dist', name));
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${name}"` });
+        return res.end(data);
+      } catch { return json(res, 404, { error: 'Run npm run build:sync to build downloads' }); }
+    }
     if (path === '/api/events') return sseHandler(req, res);
     if (path === '/api/state' && req.method === 'GET') return stateHandler(req, res);
     if (path === '/api/clips' && req.method === 'POST') return postClip(req, res);
@@ -239,7 +251,7 @@ async function serveStatic(req, res, path) {
 // ---------------------------------------------------------------- boot
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  coppy — multi-device clipboard\n`);
+  console.log(`\n  coppy — shared clipboard and files\n`);
   console.log(`  local:   http://localhost:${PORT}`);
   for (const [, addrs] of Object.entries(networkInterfaces())) {
     for (const a of addrs || []) {

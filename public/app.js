@@ -304,3 +304,50 @@ function toast(msg) {
 }
 
 setInterval(renderHistory, 60_000); // keep relative timestamps honest
+
+// File names are rendered as text, never HTML.
+async function loadFiles() {
+  try {
+    const res = await fetch('/api/files');
+    if (!res.ok) throw new Error('Could not load files');
+    const { files } = await res.json();
+    $('files').replaceChildren(...files.map(file => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = '/api/file?path=' + encodeURIComponent(file.path);
+      a.download = file.path.split('/').pop();
+      a.className = 'text-emerald-400 hover:underline break-all';
+      a.textContent = `${file.path} (${new Intl.NumberFormat().format(file.size)} bytes) ↓`;
+      li.append(a); return li;
+    }));
+  } catch (err) { $('file-status').textContent = err.message; }
+}
+$('file-upload').addEventListener('change', async (event) => {
+  const input = event.target;
+  input.disabled = true;
+  try {
+    for (const file of input.files) {
+      $('file-status').textContent = `Uploading ${file.name}…`;
+      // Uploads never silently replace another file. Keep both under distinct names.
+      let name = file.name;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await fetch('/api/file?path=' + encodeURIComponent(name), {
+          method: 'PUT', headers: { 'If-Match': '' }, body: file,
+        });
+        if (res.ok) break;
+        if (res.status === 409 && attempt === 0) { name = `${Date.now()}-${file.name}`; continue; }
+        throw new Error((await res.json()).error || 'Upload failed');
+      }
+    }
+    $('file-status').textContent = 'Uploaded. Connected desktop clients will sync automatically.';
+    await loadFiles();
+  } catch (err) { $('file-status').textContent = err.message; }
+  finally { input.disabled = false; input.value = ''; }
+});
+loadFiles();
+setInterval(loadFiles, 5000);
+
+// Use the address the user opened so commands work from the other computer.
+const syncPeer = JSON.stringify(window.location.origin);
+$('windows-sync-command').textContent = `.\\coppy-windows-amd64.exe --peer ${syncPeer} .`;
+$('mac-sync-command').textContent = `chmod +x coppy-darwin-arm64 && ./coppy-darwin-arm64 --peer ${syncPeer} .`;
